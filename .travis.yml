@@ -21,7 +21,17 @@ script:
   - py.test --pep8 --cov
   - flake8 . || true
   - if [ -n "$DOCKER_BUILD" ]; then docker build -t marathon-lb .; fi
+  # Test that the Python native extensions and HAProxy can link their libraries
+  - |
+    if [ -n "$DOCKER_BUILD" ]; then
+      docker run --rm -it --entrypoint /bin/bash marathon-lb -c " \
+        find /usr/local/lib/python3.5/dist-packages/ -type f -name '*.so*' -exec ldd {} + \
+          | (! fgrep 'not found') \
+        && ldd /usr/local/sbin/haproxy | (! fgrep 'not found')"
+    fi
 after_script:
+  # Print detailed HAProxy version info
+  - if [ -n "$DOCKER_BUILD" ]; then docker run --rm --entrypoint haproxy marathon-lb -vv ; fi
   - if [ -n "$DOCKER_BUILD" ]; then docker images; fi
 
 after_success:
