@@ -1,12 +1,12 @@
-sudo: required
-services:
-  - docker
-
 language: python
 matrix:
   include:
     - python: '2.7'
       env: DOCKER_BUILD=1
+      sudo: required
+      dist: trusty
+      services:
+        - docker
     - python: '3.4'
     - python: '3.5'
 cache: pip
