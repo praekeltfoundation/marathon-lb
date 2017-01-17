@@ -24,7 +24,7 @@ script:
   # Test that the Python native extensions and HAProxy can link their libraries
   - |
     if [ -n "$DOCKER_BUILD" ]; then
-      docker run --rm -it --entrypoint /bin/bash marathon-lb -c " \
+      docker run --rm --entrypoint /bin/bash marathon-lb -c " \
         find /usr/local/lib/python3.5/dist-packages/ -type f -name '*.so*' -exec ldd {} + \
           | (! fgrep 'not found') \
         && ldd /usr/local/sbin/haproxy | (! fgrep 'not found')"
