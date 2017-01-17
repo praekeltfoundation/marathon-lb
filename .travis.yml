@@ -21,6 +21,9 @@ script:
   - py.test --pep8 --cov
   - flake8 . || true
   - if [ -n "$DOCKER_BUILD" ]; then docker build -t marathon-lb .; fi
+  # Run some basic sanity checks...
+  - if [ -n "$DOCKER_BUILD" ]; then docker run --rm --entrypoint haproxy marathon-lb -vv; fi
+  - if [ -n "$DOCKER_BUILD" ]; then docker run --rm --entrypoint /marathon-lb/marathon_lb.py marathon-lb --help; fi
 after_script:
   - if [ -n "$DOCKER_BUILD" ]; then docker images; fi
 
