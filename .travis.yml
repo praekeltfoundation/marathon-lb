@@ -15,9 +15,13 @@ before_install:
   - pip install --upgrade pip
 install:
   - pip install -r requirements.txt -r requirements-dev.txt
+  - pip install codecov
 
 script:
-  - py.test --pep8 --cov=.
+  - py.test --pep8 --cov
   - if [ -n "$DOCKER_BUILD" ]; then docker build -t marathon-lb .; fi
 after_script:
   - if [ -n "$DOCKER_BUILD" ]; then docker images; fi
+
+after_success:
+  - codecov
