@@ -1,0 +1,23 @@
+sudo: required
+services:
+  - docker
+
+language: python
+matrix:
+  include:
+    - python: '2.7'
+      env: DOCKER_BUILD=1
+    - python: '3.4'
+    - python: '3.5'
+cache: pip
+
+before_install:
+  - pip install --upgrade pip
+install:
+  - pip install -r requirements.txt -r requirements-dev.txt
+
+script:
+  - py.test --pep8 --cov=.
+  - if [ -n "$DOCKER_BUILD" ]; then docker build -t marathon-lb .; fi
+after_script:
+  - if [ -n "$DOCKER_BUILD" ]; then docker images; fi
