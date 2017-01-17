@@ -1,4 +1,7 @@
-# marathon-lb [![Build Status](https://jenkins.mesosphere.com/service/jenkins/buildStatus/icon?job=public-marathon-lb-master)](https://jenkins.mesosphere.com/service/jenkins/job/public-marathon-lb-master/)
+# marathon-lb
+
+[![Build Status](https://travis-ci.org/praekeltfoundation/marathon-lb.svg?branch=travis-ci)](https://travis-ci.org/praekeltfoundation/marathon-lb)
+[![codecov](https://codecov.io/gh/praekeltfoundation/marathon-lb/branch/travis-ci/graph/badge.svg)](https://codecov.io/gh/praekeltfoundation/marathon-acme)
 
 Marathon-lb is a tool for managing HAProxy, by consuming
 [Marathon's](https://github.com/mesosphere/marathon) app state. HAProxy is a

@@ -1,0 +1,28 @@
+language: python
+matrix:
+  include:
+    - python: '2.7'
+      env: DOCKER_BUILD=1
+      sudo: required
+      dist: trusty
+      services:
+        - docker
+    - python: '3.4'
+    - python: '3.5'
+cache: pip
+
+before_install:
+  - pip install --upgrade pip
+install:
+  - pip install -r requirements.txt -r requirements-dev.txt
+  - pip install flake8 codecov
+
+script:
+  - py.test --pep8 --cov
+  - flake8 . || true
+  - if [ -n "$DOCKER_BUILD" ]; then docker build -t marathon-lb .; fi
+after_script:
+  - if [ -n "$DOCKER_BUILD" ]; then docker images; fi
+
+after_success:
+  - codecov
