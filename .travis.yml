@@ -18,7 +18,7 @@ install:
   - pip install flake8 codecov
 
 script:
-  - py.test --pep8 --cov
+  - py.test --cov
   - flake8 . || true
   - if [ -n "$DOCKER_BUILD" ]; then docker build -t marathon-lb .; fi
   # Run some basic sanity checks...

@@ -14,8 +14,6 @@ Every service port in Marathon can be configured independently.
 ### Configuration
 Service configuration lives in Marathon via labels.
 Marathon-lb just needs to know where to find Marathon.
-To run in listening mode you must also specify the address + port at
-which marathon-lb can be reached by Marathon.
 
 ### Command Line Usage
 """
@@ -40,7 +38,6 @@ from itertools import cycle
 from operator import attrgetter
 from shutil import move
 from tempfile import mkstemp
-from wsgiref.simple_server import make_server
 
 import dateutil.parser
 import requests
@@ -50,7 +47,8 @@ from common import (get_marathon_auth_params, set_logging_args,
                     set_marathon_auth_args, setup_logging)
 from config import ConfigTemplater, label_keys
 from lrucache import LRUCache
-from utils import get_task_ip_and_ports, ServicePortAssigner, set_ip_cache
+from utils import (CurlHttpEventStream, get_task_ip_and_ports,
+                   ServicePortAssigner, set_ip_cache)
 
 
 logger = logging.getLogger('marathon_lb')
@@ -93,7 +91,7 @@ class MarathonBackend(object):
 
 class MarathonService(object):
 
-    def __init__(self, appId, servicePort, healthCheck):
+    def __init__(self, appId, servicePort, healthCheck, strictMode):
         self.appId = appId
         self.servicePort = servicePort
         self.backends = set()
@@ -107,6 +105,7 @@ class MarathonService(object):
         self.authUser = None
         self.authPasswd = None
         self.sticky = False
+        self.enabled = not strictMode
         self.redirectHttpToHttps = False
         self.useHsts = False
         self.sslCert = None
@@ -155,10 +154,11 @@ class MarathonApp(object):
 
 
 class Marathon(object):
-    def __init__(self, hosts, health_check, auth, ca_cert=None):
+    def __init__(self, hosts, health_check, strict_mode, auth, ca_cert=None):
         # TODO(cmaloney): Support getting master list from zookeeper
         self.__hosts = hosts
         self.__health_check = health_check
+        self.__strict_mode = strict_mode
         self.__auth = auth
         self.__cycle_hosts = cycle(self.__hosts)
         self.__verify = False
@@ -217,38 +217,19 @@ class Marathon(object):
     def health_check(self):
         return self.__health_check
 
+    def strict_mode(self):
+        return self.__strict_mode
+
     def tasks(self):
         logger.info('fetching tasks')
         return self.api_req('GET', ['tasks'])["tasks"]
-
-    def add_subscriber(self, callbackUrl):
-        return self.api_req(
-                'POST',
-                ['eventSubscriptions'],
-                params={'callbackUrl': callbackUrl})
-
-    def remove_subscriber(self, callbackUrl):
-        return self.api_req(
-                'DELETE',
-                ['eventSubscriptions'],
-                params={'callbackUrl': callbackUrl})
 
     def get_event_stream(self):
         url = self.host + "/v2/events"
         logger.info(
             "SSE Active, trying fetch events from {0}".format(url))
 
-        headers = {
-            'Cache-Control': 'no-cache',
-            'Accept': 'text/event-stream'
-        }
-
-        resp = requests.get(url,
-                            stream=True,
-                            headers=headers,
-                            timeout=(3.05, 46),
-                            auth=self.__auth,
-                            verify=self.__verify)
+        resp = CurlHttpEventStream(url, self.__auth, self.__verify)
 
         class Event(object):
             def __init__(self, data):
@@ -353,7 +334,7 @@ def config(apps, groups, bind_http_https, ssl_certs, templater,
     config = templater.haproxy_head
     groups = frozenset(groups)
     duplicate_map = {}
-    # donot repeat use backend multiple times since map file is same.
+    # do not repeat use backend multiple times since map file is same.
     _ssl_certs = ssl_certs or "/etc/ssl/cert.pem"
     _ssl_certs = _ssl_certs.split(",")
 
@@ -384,6 +365,9 @@ def config(apps, groups, bind_http_https, ssl_certs, templater,
         else:
             if not has_group(groups, app.groups):
                 continue
+        # Skip if it's not actually enabled
+        if not app.enabled:
+            continue
 
         logger.debug("configuring app %s", app.appId)
         if len(app.backends) < 1:
@@ -1357,8 +1341,9 @@ def get_apps(marathon):
                 logger.warning("Skipping undefined service port")
                 continue
 
-            service = MarathonService(
-                        appId, servicePort, get_health_check(app, i))
+            service = MarathonService(appId, servicePort,
+                                      get_health_check(app, i),
+                                      marathon.strict_mode())
 
             for key_unformatted in label_keys:
                 key = key_unformatted.format(i)
@@ -1597,14 +1582,6 @@ def get_arg_parser():
                              "-m http://marathon1:8080 http://marathon2:8080",
                         default=["http://master.mesos:8080"]
                         )
-    parser.add_argument("--listening", "-l",
-                        help="(deprecated) The address this script listens " +
-                        " on for marathon events (e.g., http://0.0.0.0:8080)"
-                        )
-    parser.add_argument("--callback-url", "-u",
-                        help="The HTTP address that Marathon can call this " +
-                             "script back at (http://lb1:8080)"
-                        )
     parser.add_argument("--haproxy-config",
                         help="Location of haproxy configuration",
                         default="/etc/haproxy/haproxy.cfg"
@@ -1612,15 +1589,19 @@ def get_arg_parser():
     parser.add_argument("--group",
                         help="[required] Only generate config for apps which"
                         " list the specified names. Use '*' to match all"
-                        " groups",
+                        " groups, including those without a group specified.",
                         action="append",
                         default=list())
     parser.add_argument("--command", "-c",
                         help="If set, run this command to reload haproxy.",
                         default=None)
+    parser.add_argument("--strict-mode",
+                        help="If set, backends are only advertised if"
+                        " HAPROXY_{n}_ENABLED=true. Strict mode will be"
+                        " enabled by default in a future release.",
+                        action="store_true")
     parser.add_argument("--sse", "-s",
-                        help="Use Server Sent Events instead of HTTP "
-                        "Callbacks",
+                        help="Use Server Sent Events",
                         action="store_true")
     parser.add_argument("--health-check", "-H",
                         help="If set, respect Marathon's health check "
@@ -1661,35 +1642,6 @@ def get_arg_parser():
     parser = set_logging_args(parser)
     parser = set_marathon_auth_args(parser)
     return parser
-
-
-def run_server(marathon, listen_addr, callback_url, processor):
-    try:
-        processor.start()
-        marathon.add_subscriber(callback_url)
-
-        # TODO(cmaloney): Switch to a sane http server
-        # TODO(cmaloney): Good exception catching, etc
-        def wsgi_app(env, start_response):
-            length = int(env['CONTENT_LENGTH'])
-            data = env['wsgi.input'].read(length)
-            processor.handle_event(json.loads(data.decode('utf-8')))
-            # TODO(cmaloney): Make this have a simple useful webui for
-            # debugging / monitoring
-            start_response('200 OK', [('Content-Type', 'text/html')])
-
-            return ["Got it\n".encode('utf-8')]
-
-        listen_uri = parse.urlparse(listen_addr)
-        httpd = make_server(listen_uri.hostname, listen_uri.port, wsgi_app)
-        httpd.serve_forever()
-    finally:
-        processor.stop()
-
-
-def clear_callbacks(marathon, callback_url):
-    logger.info("Cleanup, removing subscription to {0}".format(callback_url))
-    marathon.remove_subscriber(callback_url)
 
 
 def process_sse_events(marathon, processor):
@@ -1737,9 +1689,6 @@ if __name__ == '__main__':
     else:
         if args.marathon is None:
             arg_parser.error('argument --marathon/-m is required')
-        if args.sse and args.listening:
-            arg_parser.error(
-                'cannot use --listening and --sse at the same time')
         if bool(args.min_serv_port_ip_per_task) != \
            bool(args.max_serv_port_ip_per_task):
             arg_parser.error(
@@ -1775,12 +1724,13 @@ if __name__ == '__main__':
     # Marathon API connector
     marathon = Marathon(args.marathon,
                         args.health_check,
+                        args.strict_mode,
                         get_marathon_auth_params(args),
                         args.marathon_ca_cert)
 
     # If we're going to be handling events, set up the event processor and
     # hook it up to the process signals.
-    if args.listening or args.sse:
+    if args.sse:
         processor = MarathonEventProcessor(marathon,
                                            args.haproxy_config,
                                            args.group,
@@ -1789,18 +1739,6 @@ if __name__ == '__main__':
                                            args.haproxy_map)
         signal.signal(signal.SIGHUP, processor.handle_signal)
         signal.signal(signal.SIGUSR1, processor.handle_signal)
-
-    # If in listening mode, spawn a webserver waiting for events. Otherwise
-    # just write the config.
-    if args.listening:
-        logger.warning("The event callback mode is deprecated "
-                       "and will be removed in future releases")
-        callback_url = args.callback_url or args.listening
-        try:
-            run_server(marathon, args.listening, callback_url, processor)
-        finally:
-            clear_callbacks(marathon, callback_url)
-    elif args.sse:
         backoff = 3
         while True:
             stream_started = time.time()
